@@ -7,7 +7,7 @@ from typing import Tuple
 
 class TensorType:
     
-    def __init__(self,  dtype, *dims):
+    def __init__(self, dtype, *dims):
         self.dtype: str = dtype
         self.dims: Tuple = dims
     
@@ -21,6 +21,8 @@ class _TypeAnnotation:
         self.dtype = dtype
 
     def __getitem__(self, dims):
+        if not isinstance(dims, tuple):
+            dims = (dims,)
         return TensorType(self.dtype, *dims)
 
 
@@ -38,4 +40,9 @@ if __name__ == "__main__":
     print(y)
     print(y.dtype)
     print(y.dims)
+
+    z = Int32[10]
+    print(z)
+    print(z.dtype)
+    print(z.dims)
 
