@@ -65,3 +65,7 @@ Check `puzzles.md` for the puzzle descriptions w/ pictures.
 - Small modifications to the test function & triton-viz interpreter, for better debugging.
 
 - Some minor modifications in the puzzles code (Mainly for better readability, e.g. variable naming).
+
+## Known Issues
+
+- Puzzle 11, 12 fail in GPU mode.

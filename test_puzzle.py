@@ -57,7 +57,7 @@ def test(puzzle, puzzle_spec, nelem={}, B={"B0": 32}, print_log=False, device="c
 
     if device == "cuda":
         print("Memory access detection is not supported on GPU. Skip checking.")
-        return
+        return match
 
     _, _, failures, access_offsets = collect_grid()
     mem_emoji = "✅" if not failures else "❌"

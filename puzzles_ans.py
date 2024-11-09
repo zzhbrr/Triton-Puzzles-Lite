@@ -509,9 +509,6 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
     off_i = block_id_i * B0 + tl.arange(0, B0)
     mask_i = off_i < N0
 
-    # identity
-    myexp = lambda x: tl.exp2(log2_e * x)
-
     exp_sum = tl.zeros([B0], dtype=tl.float32)
     x_max = tl.full([B0], -float("inf"), dtype=tl.float32)
     new_x_max = tl.full((B0,), -float("inf"), dtype=tl.float32)
@@ -526,8 +523,8 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
         # exp(x-new_max)=exp(x-old_max+old_max-new_max)=exp(x-old_max)*exp(old_max-new_max)
         # This is called "online softmax"
         new_x_max = tl.maximum(x_max, tl.max(x, axis=1))
-        new_exp_x = myexp(x - new_x_max[:, None])
-        factor = myexp(x_max - new_x_max)
+        new_exp_x = tl.exp2(log2_e * (x - new_x_max[:, None]))
+        factor = tl.exp2(log2_e * (x_max - new_x_max))
         exp_sum = exp_sum * factor + tl.sum(new_exp_x, axis=1)
         x_max = new_x_max
 
@@ -537,7 +534,7 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
         mask_j = off_j < T
         mask_ij = mask_i[:, None] & mask_j[None, :]
         x = tl.load(x_ptr + off_ij, mask=mask_ij)
-        exp_x = myexp(x - x_max[:, None])
+        exp_x = tl.exp2(log2_e * (x - x_max[:, None]))
         z = exp_x / exp_sum[:, None]
         tl.store(z_ptr + off_ij, z, mask=mask_ij)
     return
@@ -620,7 +617,7 @@ def flashatt_kernel(
 ):
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
-    myexp = lambda x: tl.exp2(log2_e * x)
+    # myexp = lambda x: tl.exp2(log2_e * x)
     # Finish me!
 
     off_i = block_id_i * B0 + tl.arange(0, B0)
@@ -651,9 +648,9 @@ def flashatt_kernel(
 
         # m_ij
         new_max = tl.maximum(tl.max(qk, axis=1), qk_max)
-        qk_exp = myexp(qk - new_max[:, None])
+        qk_exp = tl.exp2(log2_e * (qk - new_max[:, None]))
         # alpha
-        factor = myexp(qk_max - new_max)
+        factor = tl.exp2(log2_e * (qk_max - new_max))
         # l_ij
         new_exp_sum = exp_sum * factor + tl.sum(qk_exp, axis=1)
         v = tl.load(v_ptr + off_j, mask=mask_j, other=0.0)
