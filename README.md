@@ -15,6 +15,8 @@ pip install torch==2.5.0
 # Check triton version: triton==3.1.0
 ```
 
+Note: there is a known version issue that you may encounter. See [Known Issues](#known-issues).
+
 #### Do Puzzles
 
 The main content is integrated in this single file: `puzzles.py`. Read through it in order and complete the exercises along the way, and you will have completed the challenge!
@@ -67,5 +69,18 @@ Check `puzzles.md` for the puzzle descriptions w/ pictures.
 - Some minor modifications in the puzzles code (Mainly for better readability, e.g. variable naming).
 
 ## Known Issues
+<a id="known_issues"></a>
 
 - Puzzle 11, 12 fail in GPU mode.
+
+- There are some campatibility issues with Triton interpreter and NumPy 2.0. To check it, you can first run demos to see whether the results are correct:
+    ```bash
+    TRITON_INTERPRET=1 python3 puzzles.py -i
+    ```
+    If the results of Demo 1 look like:
+    ```
+    Demo1 Output: 
+    [0 1 2 3 4 5 6 7]
+    [0. 0. 0. 0. 0. 0. 0. 0.]
+    ```
+    Then you should first fix your version problem. You can read [this issue](https://github.com/SiriusNEO/Triton-Puzzles-Lite/issues/1) for a detailed solutions.
