@@ -739,7 +739,7 @@ Hint: the main trick is that you can split a matmul into smaller parts.
 """
 
 
-def dot_spec(x: Float32[4, 32, 32], y: Float32[4, 32, 32]) -> Float32[4, 32, 32]:
+def dot_spec(x: Float32[4, 32, 64], y: Float32[4, 64, 32]) -> Float32[4, 32, 32]:
     return x @ y
 
 
@@ -781,12 +781,12 @@ def dot_kernel(
         off_l = l + tl.arange(0, B_MID)
         mask_l = off_l < MID
         off_x = (
-            off_i[:, None, None] * N0 * N1
+            off_i[:, None, None] * N0 * MID
             + off_j[None, :, None] * MID
             + off_l[None, None, :]
         )
         off_y = (
-            off_i[:, None, None] * N0 * N1
+            off_i[:, None, None] * MID * N1
             + off_l[None, :, None] * N1
             + off_k[None, None, :]
         )
@@ -1066,7 +1066,7 @@ def run_puzzles(args, puzzles: List[int]):
             dot_kernel,
             dot_spec,
             B={"B0": 16, "B1": 16, "B2": 1, "B_MID": 16},
-            nelem={"N0": 32, "N1": 32, "N2": 4, "MID": 32},
+            nelem={"N0": 32, "N1": 32, "N2": 4, "MID": 64},
             print_log=print_log,
             device=device,
         )
