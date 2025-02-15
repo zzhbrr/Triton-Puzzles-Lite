@@ -68,6 +68,7 @@ def demo1(x_ptr):
 def run_demo1():
     print("Demo1 Output: ")
     demo1[(1, 1, 1)](torch.ones(4, 3))
+    demo1[(1, 1, 1)](torch.arange(10, 20))
     print_end_line()
 
 
@@ -146,7 +147,8 @@ here range < 5 corresponds to the 2D-mask
 def demo3(z_ptr):
     range = tl.arange(0, 8)
     z = tl.store(z_ptr + range, 10, range < 5)
-
+    val = tl.arange(100, 108)
+    z = tl.store(z_ptr + range, val, range < 5)
 
 def run_demo3():
     print("Demo3 Output: ")
@@ -215,6 +217,7 @@ def add_kernel(x_ptr, z_ptr, N0, B0: tl.constexpr):
     # We name the offsets of the pointers as "off_"
     off_x = tl.arange(0, B0)
     x = tl.load(x_ptr + off_x)
+    tl.store(z_ptr + off_x, x + 10.0)
     # Finish me!
     return
 
@@ -237,6 +240,11 @@ def add2_spec(x: Float32[200,]) -> Float32[200,]:
 @triton.jit
 def add_mask2_kernel(x_ptr, z_ptr, N0, B0: tl.constexpr):
     # Finish me!
+    pid = tl.program_id(0)
+    off_x = pid * B0 + tl.arange(0, B0)
+    mask = off_x < N0
+    x = tl.load(x_ptr + off_x, mask)
+    tl.store(z_ptr + off_x, x + 10.0, mask)
     return
 
 
@@ -260,6 +268,13 @@ def add_vec_spec(x: Float32[32,], y: Float32[32,]) -> Float32[32, 32]:
 @triton.jit
 def add_vec_kernel(x_ptr, y_ptr, z_ptr, N0, N1, B0: tl.constexpr, B1: tl.constexpr):
     # Finish me!
+    off_x = tl.arange(0, B0)
+    off_y = tl.arange(0, B1)
+    x = tl.load(x_ptr + off_x)
+    y = tl.load(y_ptr + off_y)
+    z = x[None, :] + y[:, None]
+    off_z = off_x[:, None] * N1 + off_y[None, :]
+    tl.store(z_ptr + off_z, z)
     return
 
 
@@ -286,6 +301,15 @@ def add_vec_block_kernel(
 ):
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
+    # print(block_id_x, block_id_y)
+    off_x = tl.arange(0, B0) + block_id_x * B0
+    off_y = tl.arange(0, B1) + block_id_y * B1
+    off_z = off_y[:, None] * N0 + off_x[None, :]
+    x = tl.load(x_ptr + off_x, off_x < N0)
+    y = tl.load(y_ptr + off_y, off_y < N1)
+    z = y[:, None] + x[None, :]
+    mask_z = (off_y[:, None] < N1) & (off_x[None, :] < N0)
+    tl.store(z_ptr + off_z, z, mask_z)
     # Finish me!
     return
 
@@ -314,6 +338,18 @@ def mul_relu_block_kernel(
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
     # Finish me!
+    block_id_x = tl.program_id(0)
+    block_id_y = tl.program_id(1)
+    # print(block_id_x, block_id_y)
+    off_x = tl.arange(0, B0) + block_id_x * B0
+    off_y = tl.arange(0, B1) + block_id_y * B1
+    off_z = off_y[:, None] * N0 + off_x[None, :]
+    x = tl.load(x_ptr + off_x, off_x < N0)
+    y = tl.load(y_ptr + off_y, off_y < N1)
+    z = y[:, None] * x[None, :]
+    z = tl.where(z > 0, z, 0.0)
+    mask_z = (off_y[:, None] < N1) & (off_x[None, :] < N0)
+    tl.store(z_ptr + off_z, z, mask_z)
     return
 
 
@@ -354,6 +390,18 @@ def mul_relu_block_back_kernel(
     block_id_i = tl.program_id(0)
     block_id_j = tl.program_id(1)
     # Finish me!
+    # [j, i]
+    # print(block_id_i, block_id_j)
+    off_i = tl.arange(0, B0) + block_id_i * B0
+    off_j = tl.arange(0, B1) + block_id_j * B1
+    off_xz = off_j[:, None] * N0 + off_i[None, :]
+    mask_xz = (off_j[:, None] < N1) & (off_i[None, :] < N0)
+    x = tl.load(x_ptr + off_xz, mask_xz)
+    y = tl.load(y_ptr + off_j, off_j < N1)
+    dz = tl.load(dz_ptr + off_xz, mask_xz)
+    dfx = tl.where(x * y[:, None] > 0, y[:, None], 0.0)
+    dx = dz * dfx
+    tl.store(dx_ptr + off_xz, dx, mask_xz)
     return
 
 
@@ -379,6 +427,19 @@ def sum_spec(x: Float32[4, 200]) -> Float32[4,]:
 @triton.jit
 def sum_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
     # Finish me!
+    # N0 = 4, N1 = 32, T = 200
+    # B0 = 1, B1 = 32
+    # 在axis 0进行block的切分做并行, 在axis 1上做for loop求和
+    pid = tl.program_id(0)
+    off_i = pid * B0 + tl.arange(0, B0)
+    z = tl.zeros([B0], dtype=tl.float32)
+    for j in range(0, T, B1):
+        off_j = j + tl.arange(0, B1)
+        off_x = T * off_i[:, None] + off_j[None, :]
+        mask_x = off_j[None, :] < T
+        x = tl.load(x_ptr + off_x, mask_x)
+        z += x.sum(1)
+    tl.store(z_ptr + off_i, z)
     return
 
 
@@ -419,7 +480,30 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
     """2 loops ver."""
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
+    # N0 = 4, N1 = 32, T = 200
+    # B0 = 1, B1 = 32
+    # BlockDim : (4)
+    # 在axis 0进行block的切分做并行, 在axis 1上做for loop求softmax
     # Finish me!
+    pid = tl.program_id(0)
+    off_i = pid * B0 + tl.arange(0, B0)
+    fm = tl.zeros([B0], dtype=tl.float32)
+    mx = tl.zeros([B0], dtype=tl.float32)
+    for j in range(0, T, B1):
+        off_j = j + tl.arange(0, B1)
+        off_x = T * off_i[:, None] + off_j[None, :]
+        mask_x = off_j[None, :] < T
+        x = tl.load(x_ptr + off_x, mask_x)
+        new_mx = max(mx, tl.max(x, axis=1))
+        fm = fm * tl.exp2(log2_e * (mx - new_mx)) + tl.sum(tl.exp2(log2_e * (x - new_mx)), axis=1)
+        mx = new_mx
+    for j in range(0, T, B1):
+        off_j = j + tl.arange(0, B1)
+        off_x = T * off_i[:, None] + off_j[None, :]
+        mask_x = off_j[None, :] < T
+        x = tl.load(x_ptr + off_x, mask_x)
+        z = tl.exp2(log2_e * (x - mx)) / fm
+        tl.store(z_ptr + off_x, z, mask_x)
     return
 
 
@@ -468,7 +552,32 @@ def flashatt_kernel(
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
     myexp = lambda x: tl.exp2(log2_e * x)
+    # N0 = 200, T = 200
+    # B0 = 64, B1 = 32
+    # BlockDim : (4)
+    # 一共N0个batch,每个block处理B0个batch
     # Finish me!
+    ## 标量版本的flash attention
+    off_i = block_id_i * B0 + tl.arange(0, B0)
+    q = tl.load(q_ptr + off_i, off_i < N0)
+    fm = tl.zeros([B0], dtype=tl.float32)
+    mx = tl.full([B0], -float("inf"), dtype=tl.float32)
+    o = tl.zeros([B0], dtype=tl.float32)
+    for j in range(0, T, B1):
+        off_j = j + tl.arange(0, B1)
+        mask_ij = (off_i[:, None] < N0) & (off_j[None, :] < T)
+        k = tl.load(k_ptr + off_j, off_j < T)
+        v = tl.load(v_ptr + off_j, off_j < T)
+        
+        score = q[:, None] * k[None, :] + tl.where(mask_ij, 0, -1e6)
+        new_mx = max(mx, tl.max(score, axis=1))
+        score_exp = myexp(score - new_mx[:, None])
+        new_fm = fm * myexp(mx - new_mx) + tl.sum(score_exp, axis=1)
+
+        o = o * myexp(mx - new_mx) * fm / new_fm + tl.sum(score_exp * v, axis=1) / new_fm
+        mx = new_mx
+        fm = new_fm
+    tl.store(z_ptr + off_i, o, off_i < N0)
     return
 
 
@@ -501,8 +610,33 @@ def conv2d_kernel(
     x_ptr, k_ptr, z_ptr, N0, H, W, KH: tl.constexpr, KW: tl.constexpr, B0: tl.constexpr
 ):
     block_id_i = tl.program_id(0)
+    # B0 = 1, N0 = 4
+    # H = 8, W = 8, KH = 4, KW = 4
+    # BlockDim : (4)
     # Finish me!
+    # x : [4, 8, 8], k : [4, 4]
+    off_i = block_id_i * B0 + tl.arange(0, B0)
+    mask_i = off_i < N0
+
+    off_kh = tl.arange(0, KH)
+    off_kw = tl.arange(0, KW)
+    off_k = off_kh[:, None] * KW + off_kw[None, :]
+    k = tl.load(k_ptr + off_k)
+
+    for h in range(0, H):
+        for w in range(0, W):
+            off_h_kh = h + off_kh[None, :, None]
+            off_w_kw = w + off_kw[None, None, :]
+            off_x = off_i[:, None, None] * H * W + off_h_kh * W + off_w_kw
+            mask_x = mask_i & (off_h_kh < H) & (off_w_kw < W)
+            x = tl.load(x_ptr + off_x, mask=mask_x, other=0)
+
+            z = (x * k[None, :, :]).sum(1).sum(1)
+            off_z = off_i * H * W + h * W + w
+            tl.store(z_ptr + off_z, z, mask=mask_i)
+
     return
+
 
 
 r"""
@@ -547,7 +681,27 @@ def dot_kernel(
     block_id_j = tl.program_id(0)
     block_id_k = tl.program_id(1)
     block_id_i = tl.program_id(2)
+    # N0 = 32, N1 = 32, N2 = 4, MID = 32
+    # B0 = 16, B1 = 16, B2 = 1, B_MID = 16
+    # BlockDim : (2, 2, 4)
     # Finish me!
+    off_i = block_id_i * B2 + tl.arange(0, B2)
+    mask_i = off_i < N2
+    off_j = block_id_j * B0 + tl.arange(0, B0)
+    mask_j = off_j < N0
+    off_k = block_id_k * B1 + tl.arange(0, B1)
+    mask_k = off_k < N1
+    res = tl.zeros([B2, B0, B1], dtype=tl.float32)
+    for mid in range(0, MID, B_MID):
+        off_mid = mid + tl.arange(0, B_MID)
+        mask_mid = off_mid < MID
+        mask_x = mask_i[:, None, None] & mask_j[None, :, None] & mask_mid[None, None, :]
+        x = tl.load(x_ptr + off_i[:, None, None] * MID * N0 + off_j[None, :, None] * MID + off_mid[None, None, :], mask_x)
+        mask_y = mask_i[:, None, None] & mask_mid[None, :, None] & mask_k[None, None, :]
+        y = tl.load(y_ptr + off_i[:, None, None] * MID * N1 + off_mid[None, :, None] * N1 + off_k[None, None, :], mask_y)
+        res += tl.dot(x, y)
+    mask_z = mask_i[:, None, None] & mask_j[None, :, None] & mask_k[None, None, :]
+    tl.store(z_ptr + off_i[:, None, None] * N0 * N1 + off_j[None, :, None] * N1 + off_k[None, None, :], res, mask_z)
     return
 
 
@@ -613,7 +767,53 @@ def quant_dot_kernel(
 ):
     block_id_j = tl.program_id(0)
     block_id_k = tl.program_id(1)
+    # B0 = 16, B1 = 16, B_MID = 64
+    # N0 = 32, N1 = 32, MID = 64
+    # BlockDim : (2, 2)
     # Finish me!
+    off_j = block_id_j * B0 + tl.arange(0, B0)
+    mask_j = off_j < N0
+    off_k = block_id_k * B1 + tl.arange(0, B1)
+    mask_k = off_k < N1
+    res = tl.zeros([B0, B1], dtype=tl.float32)
+
+    for mid in range(0, MID, B_MID):
+        off_activation = (mid + tl.arange(0, B_MID))[:, None] * N1 + off_k[None,]
+        mask_activation = (((mid + tl.arange(0, B_MID))[:, None]) < MID) & (off_k[None, :] < N1)
+        act = tl.load(activation_ptr + off_activation, mask_activation)
+
+        # mask是int32存的,每个参数占4bit,每个int32可以存下FPINT=8个量化参数
+        # 原先[32, 64]的int4 weight矩阵,存的时候是[32, 64//8=8]的int32矩阵
+        off_weight = off_j[:, None] * MID//FPINT + (mid // FPINT + tl.arange(0, B_MID // FPINT))[None, :]
+        mask_weight = (off_j[:, None] < N0) & ((mid // FPINT + tl.arange(0, B_MID // FPINT))[None, :] < MID // FPINT)
+        weight_quantized = tl.load(weight_ptr + off_weight, mask_weight)
+
+        # scale是float32存的,每个group有一个scale
+        # 比如[32, 64]的weight,需要[32, 8]的scale矩阵
+        group_cnt = MID // GROUP
+        off_scale = off_j[:, None] * group_cnt + (mid // GROUP + tl.arange(0, B_MID // GROUP))[None, :]
+        mask_scale = (off_j[:, None] < N0) & ((mid // GROUP + tl.arange(0, B_MID // GROUP))[None, :] < GROUP)
+        scale = tl.load(scale_ptr + off_scale, mask_scale)
+
+        # offset是int32存的,每个offset参数占4bit,每个group有一个offset
+        # 比如[32, 64]的weight,需要[32, 8]的offset矩阵,实际存的时候是[32, 1]的int32矩阵
+        scale_cnt = MID // GROUP // FPINT
+        off_shift = off_j[:, None] * scale_cnt + (mid // GROUP // FPINT + tl.arange(0, B_MID // GROUP // FPINT))[None, :]
+        mask_shift = (off_j[:, None] < N0) & ((mid // GROUP // FPINT + tl.arange(0, B_MID // GROUP // FPINT))[None, :] < scale_cnt)
+        shift = tl.load(offset_ptr + off_shift, mask_shift)
+
+        unpacked_off_ = tl.arange(0, FPINT) * 4 # (0, 4, 8, 12, 16, 20, 24, 28)
+        unpacked_mask_ = (1 << 4) - 1 # 0b1111
+        unpacked_weight = ((weight_quantized[:, :, None] >> unpacked_off_) & unpacked_mask_) # [B0, B_MID//FPINT, FPINT]
+        unpacked_shift = ((shift[:, :, None] >> unpacked_off_) & unpacked_mask_) # [B0, B_MID//FPINT//GROUP, FPINT]
+
+        # scale: [B0, B_MID//GROUP, 1]
+        weight = scale[:, :, None] * (unpacked_weight - unpacked_shift.reshape(B0, B_MID//GROUP)[:, :, None])
+        
+        res += tl.dot(weight.reshape(B0, B_MID), act)
+    
+    tl.store(z_ptr + off_j[:, None] * N1 + off_k[None, :], res, mask_j[:, None] < N0 & mask_k[None, :] < N1)
+
     return
 
 
